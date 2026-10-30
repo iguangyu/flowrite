@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FlowWrite · 心流写作</title>
+<meta name="color-scheme" content="light">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<section id="intro" aria-label="进入写作">
+  <canvas id="introCanvas" aria-hidden="true"></canvas>
+  <div class="intro-copy">
+    <div class="intro-tag"><span class="px"></span><span class="intro-brand">FlowWrite</span></div>
+    <h1 class="intro-title">心流写作</h1>
+    <p class="intro-sub">你写。它在旁边想下一步。</p>
+    <button id="enterBtn" class="btn btn-primary" type="button">开始写</button>
+    <div class="intro-hint" id="introHint">按任意键进入</div>
+  </div>
+  <div class="intro-progress" aria-hidden="true"><i id="introBar"></i></div>
+</section>
+
+<div id="app" class="app" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <span class="px"></span>
+      <span class="brand-name">FlowWrite</span>
+    </div>
+    <div class="story-title" id="storyTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="故事标题">未命名故事</div>
+    <div class="top-space"></div>
+    <div class="top-meta" id="topMeta">0 字</div>
+    <button class="tbtn" id="btnMute" type="button" title="静音 AI（Alt+M）">AI 开着</button>
+    <button class="tbtn" id="btnGlobal" type="button" title="总览（Alt+G）">总览</button>
+    <button class="tbtn" id="btnRail" type="button" title="折叠侧栏（Alt+B）">侧栏</button>
+    <button class="tbtn" id="btnSettings" type="button" title="设置（Alt+S）">设置</button>
+  </header>
+
+  <div class="workspace">
+    <main class="paper" id="paper">
+      <div class="paper-inner">
+        <div id="editor" class="editor" contenteditable="true" spellcheck="false" role="textbox"
+             aria-multiline="true" aria-label="正文" data-placeholder="从一句话开始。写下去，它会跟上你。"></div>
+        <div class="intent" id="intent" hidden>
+          <span class="intent-label">往这走</span>
+          <span class="intent-text" id="intentText"></span>
+          <button class="intent-x" id="intentClear" type="button" aria-label="清除方向">×</button>
+        </div>
+      </div>
+      <div class="ghost-hint" id="ghostHint" hidden>
+        <span><kbd>Tab</kbd> 全收</span>
+        <span><kbd>Ctrl</kbd>+<kbd>→</kbd> 收一句</span>
+        <span><kbd>Esc</kbd> 不要</span>
+      </div>
+    </main>
+
+    <aside class="rail" id="rail">
+      <section class="pane pane-beats">
+        <div class="pane-head">
+          <span class="pane-title">接下来</span>
+          <span class="pane-count" id="beatCount">0</span>
+          <button class="mini" id="btnBeats" type="button" title="重新想一次（Alt+R）">重想</button>
+        </div>
+        <ol class="beats" id="beats"></ol>
+        <div class="pane-empty" id="beatsEmpty">写十几个字，它就会给三条路。</div>
+      </section>
+
+      <section class="pane pane-alts">
+        <div class="pane-head">
+          <span class="pane-title">备选</span>
+          <span class="pane-count" id="altCount">0</span>
+        </div>
+        <ul class="alts" id="alts"></ul>
+        <div class="pane-empty" id="altsEmpty">丢掉的句子会落在这儿，不会真丢。</div>
+      </section>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <span class="stat" id="statStatus">就绪</span>
+    <span class="stat" id="statWords">0 字</span>
+    <span class="stat" id="statLatency">—</span>
+    <span class="status-space"></span>
+    <span class="stat stat-model" id="statModel">—</span>
+    <span class="stat stat-keys">Tab 收下、Esc 丢弃、Alt+1/2/3 选路</span>
+  </footer>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head">
+      <h2 id="sheetTitle">总览</h2>
+      <div class="sheet-tabs">
+        <button class="tab is-on" data-tab="global" type="button">总览</button>
+        <button class="tab" data-tab="settings" type="button">设置</button>
+      </div>
+      <button class="sheet-x" id="sheetClose" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<noscript>
+  <div class="noscript">FlowWrite 需要 JavaScript 才能写作。请在浏览器里打开脚本权限后刷新。</div>
+</noscript>
+
+<script src="/vendor/baffle.min.js"></script>
+<script src="/intro.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
