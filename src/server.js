@@ -8,7 +8,10 @@ import { Store, countWords } from './store.js';
 import { streamChat, chatOnce, parseLooseJson } from './llm.js';
 import {
   buildGhostMessages,
-  buildBeatsMessages,
+  buildPlanMessages,
+  buildSparkMessages,
+  buildWordMessages,
+  buildWenlingTalkMessages,
   buildExtractMessages,
   buildPolishMessages,
   cleanGhost
@@ -71,6 +74,17 @@ export function startServer({ port = 4780, host = '127.0.0.1', quiet = false } =
 }
 
 // ---------- 静态 ----------
+// 构建戳：app.js 的修改时间。任何一次改动都会让 ?v= 变掉，
+// 浏览器下次打开就必然重新拉 JS，不会再出现"改了但页面还是旧的"。
+function buildStamp() {
+  try {
+    const st = fs.statSync(path.join(PUBLIC_DIR, 'app.js'));
+    return String(Math.round(st.mtimeMs));
+  } catch {
+    return String(Date.now());
+  }
+}
+
 function serveStatic(req, res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -83,15 +97,34 @@ function serveStatic(req, res, pathname) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
       return;
     }
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'Cache-Control': 'no-cache'
-    });
+    const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+    if (path.extname(file).toLowerCase() === '.html') {
+      const html = buf.toString('utf8').replace(/__BUILD__/g, buildStamp());
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+      res.end(html);
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
     res.end(buf);
   });
 }
 
 // ---------- 工具 ----------
+const STAGES = ['铺垫', '升级', '转折', '收束'];
+
+// 模型给的节奏字段可能缺、可能是字符串数字、可能 stage 不在枚举里
+function normalizePacing(p) {
+  if (!p || typeof p !== 'object') return null;
+  const t = Number(p.tension);
+  return {
+    stage: STAGES.includes(p.stage) ? p.stage : STAGES[0],
+    tension: Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : 0.4,
+    change: String(p.change || '').slice(0, 80),
+    pull: String(p.pull || '').slice(0, 80),
+    note: String(p.note || '').slice(0, 90)
+  };
+}
+
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, {
@@ -206,6 +239,11 @@ async function handleApi(req, res, url, pathname) {
     if (!store.exists(slug)) return sendJson(res, 404, { error: '故事不存在' });
     const prev = store.readManuscript(slug);
     const next = String(body.text ?? '');
+    // 防呆：某个开着空编辑器的页面把 autosave 打过来，就会把有内容的稿子清成空。
+    // 这种"清空"必须显式声明（force:true），否则拒收。
+    if (!next.trim() && prev.trim() && !body.force) {
+      return sendJson(res, 409, { error: '拒收空稿：原稿有内容。确认要清空请在请求里带 force:true' });
+    }
     const res1 = store.writeManuscript(slug, next);
     // 每涨 400 字留一个快照
     if (countWords(next) - countWords(prev) >= 400) store.snapshot(slug, next);
@@ -269,7 +307,7 @@ async function handleApi(req, res, url, pathname) {
     return;
   }
 
-  // ---- 走向 ----
+  // ---- 走向 + 节奏（一次调用） ----
   if (pathname === '/api/beats' && req.method === 'POST') {
     const body = await readJson(req);
     const slug = body.story;
@@ -277,23 +315,28 @@ async function handleApi(req, res, url, pathname) {
     const role = resolveRole(cfg, 'planner');
     const text = String(body.text ?? store.readManuscript(slug));
     const recent = store.readBeats(slug, 12).map((b) => b.text).filter(Boolean);
-    const messages = buildBeatsMessages({
+    const messages = buildPlanMessages({
       meta: store.readMeta(slug),
       bible: store.readBible(slug),
       text,
       recentBeats: recent
     });
-    let raw = await chatOnce(role, messages, { temperature: role.temperature ?? 0.95 });
+    let raw = await chatOnce(role, messages, { temperature: role.temperature ?? 0.9 });
     // 推理档位吃满 token 时正文会是空的，翻倍预算再试一次
     if (!raw.trim()) {
       raw = await chatOnce(role, messages, {
-        temperature: role.temperature ?? 0.95,
+        temperature: role.temperature ?? 0.9,
         maxTokens: Math.min(4000, (role.maxTokens || 1400) * 2)
       });
     }
-    let beats = parseLooseJson(raw);
-    if (beats && !Array.isArray(beats)) {
-      beats = beats.beats || beats.options || beats.next || null;
+    const parsed = parseLooseJson(raw);
+    let beats = null;
+    let pacing = null;
+    if (Array.isArray(parsed)) {
+      beats = parsed;
+    } else if (parsed && typeof parsed === 'object') {
+      beats = parsed.beats || parsed.options || parsed.next || null;
+      pacing = parsed.pacing || parsed.rhythm || null;
     }
     if (!Array.isArray(beats)) {
       beats = raw
@@ -306,7 +349,103 @@ async function handleApi(req, res, url, pathname) {
       .map((b) => (typeof b === 'string' ? b : b?.text || b?.beat || '').replace(/^["'「]|["'」]$/g, '').trim())
       .filter(Boolean)
       .slice(0, 3);
-    return sendJson(res, 200, { beats });
+    return sendJson(res, 200, { beats, pacing: normalizePacing(pacing) });
+  }
+
+  // ---- 灵感（火花） ----
+  if (pathname === '/api/sparks' && req.method === 'POST') {
+    const body = await readJson(req);
+    const slug = body.story;
+    if (!store.exists(slug)) return sendJson(res, 404, { error: '故事不存在' });
+    const role = resolveRole(cfg, 'sparker');
+    const text = String(body.text ?? store.readManuscript(slug));
+    const messages = buildSparkMessages({
+      meta: store.readMeta(slug),
+      bible: store.readBible(slug),
+      text
+    });
+    let raw = await chatOnce(role, messages, { temperature: role.temperature ?? 1 });
+    if (!raw.trim()) {
+      raw = await chatOnce(role, messages, {
+        temperature: role.temperature ?? 1,
+        maxTokens: Math.min(2000, (role.maxTokens || 700) * 2)
+      });
+    }
+    let sparks = parseLooseJson(raw);
+    if (sparks && !Array.isArray(sparks)) sparks = sparks.sparks || sparks.ideas || null;
+    if (!Array.isArray(sparks)) {
+      sparks = raw
+        .split('\n')
+        .map((l) => l.replace(/^[\s\-*\d.、:：]+/, '').trim())
+        .filter((l) => l.length > 4 && l.length < 60)
+        .slice(0, 3);
+    }
+    sparks = sparks
+      .map((s) => (typeof s === 'string'
+        ? { kind: '', text: s }
+        : { kind: s?.kind || '', text: s?.text || s?.idea || '' }))
+      .map((s) => ({
+        kind: String(s.kind || '').slice(0, 8),
+        text: String(s.text || '').replace(/^["'「]|["'」]$/g, '').trim()
+      }))
+      .filter((s) => s.text)
+      .slice(0, 4);
+    return sendJson(res, 200, { sparks });
+  }
+
+  // ---- 文灵：换个词 ----
+  if (pathname === '/api/wenling/word' && req.method === 'POST') {
+    const body = await readJson(req);
+    const word = String(body.word || '').slice(0, 12).trim();
+    if (!word) return sendJson(res, 200, { word: '' });
+    const role = resolveRole(cfg, 'planner');
+    const messages = buildWordMessages({ text: String(body.text || ''), word });
+    let raw = '';
+    try {
+      raw = await chatOnce(role, messages, { temperature: 0.9, maxTokens: 200 });
+      if (!String(raw || '').trim()) {
+        raw = await chatOnce(role, messages, { temperature: 0.9, maxTokens: 320 });
+      }
+    } catch {
+      raw = '';
+    }
+    const clean = (x) => String(x || '')
+      .replace(/^["'「『\s]+|["'」』。，、\s]+$/g, '')
+      .split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+    let out = clean(raw);
+    // 原样吐回来等于没换，再摇一次
+    if (!out || out === word) {
+      try {
+        const again = clean(await chatOnce(role, messages, { temperature: 1.08, maxTokens: 320 }));
+        if (again && again !== word) out = again;
+      } catch {}
+    }
+    return sendJson(res, 200, { word: out.slice(0, 12) });
+  }
+
+  // ---- 文灵：陪他说句话（本地规则接不住的时候才走这里） ----
+  if (pathname === '/api/wenling/talk' && req.method === 'POST') {
+    const body = await readJson(req);
+    const say = String(body.say || '').slice(0, 300);
+    if (!say.trim()) return sendJson(res, 200, { line: '' });
+    const role = resolveRole(cfg, 'planner');
+    const messages = buildWenlingTalkMessages({ text: String(body.text || ''), say });
+    // 90 tokens 会被截断（回出来是"沉思前"这种半句），空返回更糟，所以给够再重试一次
+    let raw = '';
+    try {
+      raw = await chatOnce(role, messages, { temperature: 0.95, maxTokens: 260 });
+      if (!String(raw || '').trim()) {
+        raw = await chatOnce(role, messages, { temperature: 0.95, maxTokens: 420 });
+      }
+    } catch {
+      raw = '';
+    }
+    const line = String(raw || '')
+      .replace(/^["'「『\s]+|["'」』\s]+$/g, '')
+      .split('\n')
+      .map((x) => x.trim())
+      .filter(Boolean)[0] || '';
+    return sendJson(res, 200, { line: line.slice(0, 80) });
   }
 
   // ---- 抽取档案 ----
@@ -364,6 +503,7 @@ async function handleApi(req, res, url, pathname) {
     }
     if (patch.trigger) merged.trigger = { ...cfg.trigger, ...patch.trigger };
     if (patch.ui) merged.ui = { ...cfg.ui, ...patch.ui };
+    if (patch.effects) merged.effects = { ...cfg.effects, ...patch.effects };
     saveConfig(merged);
     return sendJson(res, 200, publicConfig(loadConfig()));
   }
@@ -418,6 +558,11 @@ async function handleApi(req, res, url, pathname) {
       'Content-Disposition': `attachment; filename="${encodeURIComponent(meta.title)}.${fmt === 'txt' ? 'txt' : 'md'}"`
     });
     return res.end(out);
+  }
+
+  // 版本号：前端拿它判断自己是不是旧页面
+  if (pathname === '/api/version' && req.method === 'GET') {
+    return sendJson(res, 200, { build: buildStamp() });
   }
 
   if (pathname === '/api/presets' && req.method === 'GET') {

@@ -50,22 +50,37 @@ export function defaultConfig() {
       // effort 是 DeepSeek 的推理档位：low / high / max。
       // 实测 low 首字 1.4s，max 要 3.7s —— 心流场景只能用 low。
       // deepseek-v4-pro 会把 token 全烧在推理上、正文返回空，默认不用。
-      writer: { provider: 'deepseek', model: 'deepseek-flash', temperature: 0.85, maxTokens: 700, effort: 'low' },
+      writer: { provider: 'deepseek', model: 'deepseek-flash', temperature: 0.8, maxTokens: 900, effort: 'high' },
       planner: { provider: 'deepseek', model: 'deepseek-flash', temperature: 0.9, maxTokens: 1400, effort: 'low' },
-      archivist: { provider: 'deepseek', model: 'deepseek-flash', temperature: 0.2, maxTokens: 2200, effort: 'low' }
+      archivist: { provider: 'deepseek', model: 'deepseek-flash', temperature: 0.2, maxTokens: 2200, effort: 'low' },
+      // 灵感要野，温度给高
+      sparker: { provider: 'deepseek', model: 'deepseek-flash', temperature: 1.0, maxTokens: 800, effort: 'low' }
     },
     trigger: {
-      idleMs: 1100,
-      minCharsForGhost: 6,
+      idleMs: 650,
+      minCharsForGhost: 4,
       charsForBeats: 180,
       charsForBible: 800,
+      charsForSparks: 600,
       ghostSentences: 3
     },
     ui: {
-      fontSize: 17,
+      fontSize: 16,
       lineHeight: 1.85,
-      sidebarWidth: 300,
+      zoom: 125,
       font: 'serif'
+    },
+    effects: {
+      // 走向/灵感用 baffle.js 逐字解码，这是它的总时长
+      baffleMs: 1600,
+      // 幽灵字是流式的，用同一套「乱码还原」观感，这是每个字落定的间隔
+      ghostDecode: true,
+      decodeMsPerChar: 40,
+      // 乱码用哪套字符：hanzi / rare / kana / latin / binary / symbol / morse / block
+      ghostGlyphs: 'hanzi',
+      panelGlyphs: 'latin',
+      // 等首字时占位几个字
+      placeholderLen: 10
     }
   };
 }
@@ -167,6 +182,7 @@ export function publicConfig(cfg) {
     presets: PRESETS,
     roles: cfg.roles,
     trigger: cfg.trigger,
-    ui: cfg.ui
+    ui: cfg.ui,
+    effects: cfg.effects
   };
 }
